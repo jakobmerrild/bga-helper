@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "BGA Red Thumbs",
+  "version": "1.0.0",
+  "description": "List the players you have red-thumbed and who have red-thumbed you on Board Game Arena.",
+  "permissions": ["sidePanel", "scripting", "storage"],
+  "host_permissions": [
+    "https://boardgamearena.com/*",
+    "https://*.boardgamearena.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_title": "BGA Red Thumbs" }
+}

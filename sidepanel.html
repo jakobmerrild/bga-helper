@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BGA Red Thumbs</title>
+  <style>
+    :root {
+      --bg: #ffffff; --fg: #1d2129; --muted: #6b7280; --border: #e5e7eb;
+      --btn: #f3f4f6; --btn-hover: #e5e7eb; --danger: #c62828;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1b1d22; --fg: #e8eaed; --muted: #9aa0a6; --border: #33363d;
+        --btn: #2a2d34; --btn-hover: #383c45; --danger: #ef5350;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 12px; background: var(--bg); color: var(--fg);
+           font: 14px/1.4 system-ui, sans-serif; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    h1 { font-size: 16px; margin: 0; }
+    h2 { font-size: 14px; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+    .count { color: var(--muted); font-weight: normal; }
+    #status { color: var(--muted); margin: 6px 0; }
+    #status.error { color: var(--danger); }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+    img.avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; background: var(--border); flex: none; }
+    a.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+             color: inherit; text-decoration: none; font-weight: 500; }
+    a.name:hover { text-decoration: underline; }
+    button { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+             background: var(--btn); color: var(--fg); cursor: pointer; flex: none; }
+    button:hover:not(:disabled) { background: var(--btn-hover); }
+    button:disabled { opacity: .5; cursor: default; }
+    .empty { color: var(--muted); padding: 6px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔴 Red thumbs</h1>
+    <button id="refresh" title="Re-read from the page">Refresh</button>
+  </header>
+  <div id="status"></div>
+
+  <h2>Red thumbs I have given <span class="count" id="given-count"></span></h2>
+  <ul id="given"></ul>
+
+  <h2>Red thumbs I have received <span class="count" id="taken-count"></span></h2>
+  <ul id="taken"></ul>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
