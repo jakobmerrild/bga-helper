@@ -6,6 +6,11 @@ Displays all the players you have red-thumbed and all the players who have red-t
 Allows you to remove the red-thumb from players you have red-thumbed and red-thumb players back who
 have red-thumbed you from within the extension side-bar.
 
+### Bulk red thumb
+Search for a game and red-thumb all players below or above a certain ELO threshold.
+Input threshold should be as seen on in the UI, e.g. to red thumb all players who haven't reached
+the ability to join the Arena choose "above the ELO threshold" and type `100`
+
 
 ## Installation
 1. Download the source code, either by cloning the repository or by click the green `Code` button above and `Download Zip`
