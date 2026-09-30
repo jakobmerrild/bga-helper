@@ -3,52 +3,121 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BGA Red Thumbs</title>
+  <title>BGA Helper</title>
   <style>
     :root {
       --bg: #ffffff; --fg: #1d2129; --muted: #6b7280; --border: #e5e7eb;
-      --btn: #f3f4f6; --btn-hover: #e5e7eb; --danger: #c62828;
+      --btn: #f3f4f6; --btn-hover: #e5e7eb; --danger: #c62828; --accent: #c62828;
     }
     @media (prefers-color-scheme: dark) {
       :root {
         --bg: #1b1d22; --fg: #e8eaed; --muted: #9aa0a6; --border: #33363d;
-        --btn: #2a2d34; --btn-hover: #383c45; --danger: #ef5350;
+        --btn: #2a2d34; --btn-hover: #383c45; --danger: #ef5350; --accent: #ef5350;
       }
     }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 12px; background: var(--bg); color: var(--fg);
            font: 14px/1.4 system-ui, sans-serif; }
-    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-    h1 { font-size: 16px; margin: 0; }
+    h1 { font-size: 16px; margin: 0 0 10px; }
     h2 { font-size: 14px; margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
     .count { color: var(--muted); font-weight: normal; }
-    #status { color: var(--muted); margin: 6px 0; }
-    #status.error { color: var(--danger); }
+    .muted { color: var(--muted); font-size: 12px; }
+    #status, #bulk-status { color: var(--muted); margin: 6px 0; }
+    #status.error, #bulk-status.error { color: var(--danger); }
+
+    /* tabs */
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+    .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 10px; }
+    .tab:hover:not(:disabled) { background: none; color: var(--accent); }
+    .tab.active { border-bottom-color: var(--accent); font-weight: 600; }
+    section[hidden] { display: none; }
+    .toolbar { display: flex; justify-content: flex-end; }
+
+    /* lists */
     ul { list-style: none; margin: 0; padding: 0; }
     li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
     img.avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; background: var(--border); flex: none; }
     a.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
              color: inherit; text-decoration: none; font-weight: 500; }
     a.name:hover { text-decoration: underline; }
-    button { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
-             background: var(--btn); color: var(--fg); cursor: pointer; flex: none; }
+    .empty { color: var(--muted); padding: 6px 0; }
+
+    /* controls */
+    button, input, select { font: inherit; color: var(--fg); }
+    button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+             background: var(--btn); cursor: pointer; flex: none; }
     button:hover:not(:disabled) { background: var(--btn-hover); }
     button:disabled { opacity: .5; cursor: default; }
-    .empty { color: var(--muted); padding: 6px 0; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--accent); }
+    input, select { width: 100%; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+    label { display: block; font-weight: 600; margin: 12px 0 4px; }
+    .row { display: flex; gap: 6px; }
+    .actions { display: flex; gap: 8px; margin-top: 14px; }
+
+    /* stats */
+    dl.stats { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin: 10px 0 0; }
+    dl.stats dt { color: var(--muted); }
+    dl.stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+    #bulk-note { margin-top: 8px; }
   </style>
 </head>
 <body>
-  <header>
-    <h1>🔴 Red thumbs</h1>
-    <button id="refresh" title="Re-read from the page">Refresh</button>
-  </header>
-  <div id="status"></div>
+  <h1>BGA Helper</h1>
 
-  <h2>Red thumbs I have given <span class="count" id="given-count"></span></h2>
-  <ul id="given"></ul>
+  <nav class="tabs">
+    <button class="tab active" data-tab="thumbs">Red thumbs</button>
+    <button class="tab" data-tab="bulk">Bulk red thumb</button>
+  </nav>
 
-  <h2>Red thumbs I have received <span class="count" id="taken-count"></span></h2>
-  <ul id="taken"></ul>
+  <!-- Tab 1: lists -->
+  <section id="tab-thumbs">
+    <div class="toolbar"><button id="refresh" title="Re-read from the page">Refresh</button></div>
+    <div id="status"></div>
+
+    <h2>Red thumbs I have given <span class="count" id="given-count"></span></h2>
+    <ul id="given"></ul>
+
+    <h2>Red thumbs I have received <span class="count" id="taken-count"></span></h2>
+    <ul id="taken"></ul>
+  </section>
+
+  <!-- Tab 2: bulk -->
+  <section id="tab-bulk" hidden>
+    <label for="game-query">Game</label>
+    <div class="row">
+      <input id="game-query" type="text" placeholder="Search for a game, e.g. Ark Nova">
+      <button id="game-search">Search</button>
+    </div>
+    <select id="game-select" hidden style="margin-top:6px"></select>
+
+    <label for="direction">Red thumb players…</label>
+    <select id="direction">
+      <option value="below" selected>below the ELO threshold</option>
+      <option value="above">above the ELO threshold</option>
+    </select>
+
+    <label for="threshold">ELO threshold</label>
+    <input id="threshold" type="number" step="any" value="0">
+    <div class="muted">1300 is added to this value before comparing it with the ranking returned by BGA.</div>
+
+    <div class="actions">
+      <button id="bulk-start" class="primary">Start</button>
+      <button id="bulk-stop" disabled>Stop</button>
+    </div>
+
+    <div id="bulk-status"></div>
+
+    <dl class="stats">
+      <dt>Ranking pages fetched</dt><dd id="st-pages">0</dd>
+      <dt>Players scanned</dt><dd id="st-scanned">0</dd>
+      <dt>Matching the threshold</dt><dd id="st-matched">0</dd>
+      <dt>Red-thumbed</dt><dd id="st-thumbed">0</dd>
+      <dt>Skipped (already red-thumbed)</dt><dd id="st-skipped">0</dd>
+      <dt>Failed</dt><dd id="st-failed">0</dd>
+    </dl>
+    <div id="bulk-note" class="muted"></div>
+  </section>
 
   <script src="sidepanel.js"></script>
 </body>

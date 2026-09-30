@@ -2,10 +2,20 @@ const BASE = "https://boardgamearena.com";
 const CACHE_KEY = "profileCache";
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
 
+// Bulk operation pacing (be gentle with the server)
+const RANK_DELAY = 500;    // ms between ranking page requests
+const THUMB_DELAY = 250;   // ms between red-thumb requests
+const FAILURE_BACKOFF = 3000;
+const MAX_CONSECUTIVE_FAILURES = 5;
+const ELO_OFFSET = 1300;
+
 const state = { tabId: null, given: [], taken: [] };
 const profiles = new Map(); // id -> { name, avatar, t }
+let bulkRunning = false;
+let bulkStopRequested = false;
 
 const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const statusEl = $("status");
 
 function setStatus(msg, isError = false) {
@@ -39,7 +49,59 @@ async function readPageInfo(tabId) {
   return res?.result ?? null;
 }
 
-// Also runs in the page so the request carries the site's cookies/token.
+// Search `globalUserInfos.game_list` by display_name_en (filtered in the page; the list is large).
+async function findGamesInPage(tabId, query) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    args: [query],
+    func: (query) => {
+      const list = typeof globalUserInfos !== "undefined" ? globalUserInfos.game_list : null;
+      if (!Array.isArray(list)) return null;
+      const q = query.toLowerCase();
+      return list
+        .filter((g) => typeof g.display_name_en === "string" && g.display_name_en.toLowerCase().includes(q))
+        .map((g) => ({ id: g.id, name: g.display_name_en }))
+        .sort((a, b) => {
+          const as = a.name.toLowerCase().startsWith(q), bs = b.name.toLowerCase().startsWith(q);
+          return as !== bs ? (as ? -1 : 1) : a.name.localeCompare(b.name);
+        });
+    },
+  });
+  return res?.result ?? null;
+}
+
+// Generic same-origin request made from inside the BGA tab (cookies + request token).
+async function pageRequest(tabId, url, init = {}) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    args: [url, init],
+    func: async (url, init) => {
+      try {
+        const token = window.bgaConfig?.requestToken;
+        const headers = { ...(init.headers || {}) };
+        if (token) headers["X-Request-Token"] = token;
+        const r = await fetch(url, { ...init, headers, credentials: "include" });
+        return { ok: r.ok, status: r.status, text: await r.text() };
+      } catch (e) {
+        return { ok: false, status: 0, text: String(e) };
+      }
+    },
+  });
+  return res?.result ?? { ok: false, status: 0, text: "No result from page" };
+}
+
+// Request that returns the `data` part of a BGA JSON response, or throws.
+async function pageJson(tabId, url, init) {
+  const r = await pageRequest(tabId, url, init);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  let json;
+  try { json = JSON.parse(r.text); } catch { throw new Error("Invalid JSON response"); }
+  if (String(json.status) !== "1") throw new Error("Server returned an error");
+  return json.data;
+}
+
 async function changeReputationInPage(tabId, playerId, value) {
   const [res] = await chrome.scripting.executeScript({
     target: { tabId },
@@ -121,7 +183,7 @@ async function ensureProfiles(ids) {
   saveCache();
 }
 
-/* ---------- Rendering ---------- */
+/* ---------- Rendering (Red thumbs tab) ---------- */
 
 function makeRow(kind, id) {
   const li = document.createElement("li");
@@ -186,8 +248,6 @@ function render() {
   renderList("taken");
 }
 
-/* ---------- Actions ---------- */
-
 async function act(btn, id, value) {
   const label = btn.textContent;
   btn.disabled = true;
@@ -204,8 +264,6 @@ async function act(btn, id, value) {
   else if (!state.given.includes(id)) state.given.push(id);
   render();
 }
-
-/* ---------- Init ---------- */
 
 async function load() {
   setStatus("Loading…");
@@ -235,6 +293,228 @@ async function load() {
   await ensureProfiles([...info.given, ...info.taken]);
 }
 
+/* ---------- Tabs ---------- */
+
+document.querySelectorAll(".tab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+    $("tab-thumbs").hidden = btn.dataset.tab !== "thumbs";
+    $("tab-bulk").hidden = btn.dataset.tab !== "bulk";
+  };
+});
+
+/* ---------- Bulk red thumb ---------- */
+
+function setBulkStatus(msg, isError = false) {
+  const el = $("bulk-status");
+  el.textContent = msg || "";
+  el.classList.toggle("error", isError);
+}
+
+function showStats(s, note = "") {
+  $("st-pages").textContent = s.pages;
+  $("st-scanned").textContent = s.scanned;
+  $("st-matched").textContent = s.matched;
+  $("st-thumbed").textContent = s.thumbed;
+  $("st-skipped").textContent = s.skipped;
+  $("st-failed").textContent = s.failed;
+  $("bulk-note").textContent = note;
+}
+
+function setBulkRunning(running) {
+  bulkRunning = running;
+  $("bulk-start").disabled = running;
+  $("bulk-stop").disabled = !running;
+  for (const id of ["game-query", "game-search", "game-select", "direction", "threshold"]) {
+    $(id).disabled = running;
+  }
+}
+
+async function searchGames() {
+  const query = $("game-query").value.trim();
+  if (!query) return;
+  const select = $("game-select");
+  select.hidden = true;
+  setBulkStatus("Searching…");
+  try {
+    const tab = await findBgaTab();
+    if (!tab) throw new Error("Open a boardgamearena.com tab first.");
+    state.tabId = tab.id;
+    const games = await findGamesInPage(tab.id, query);
+    if (!games) throw new Error("`globalUserInfos.game_list` not found. Are you logged in? Try reloading the page.");
+    select.replaceChildren();
+    if (!games.length) {
+      setBulkStatus("No games found.", true);
+      return;
+    }
+    for (const g of games) {
+      const opt = document.createElement("option");
+      opt.value = g.id;
+      opt.textContent = g.name;
+      select.append(opt);
+    }
+    select.hidden = false;
+    setBulkStatus(games.length === 1 ? "" : `${games.length} games found — pick one.`);
+  } catch (e) {
+    setBulkStatus(`Search failed: ${e.message}`, true);
+  }
+}
+
+async function startBulk() {
+  const select = $("game-select");
+  if (select.hidden || !select.value) {
+    setBulkStatus("Search for a game and select it first.", true);
+    return;
+  }
+  const threshold = parseFloat($("threshold").value);
+  if (!Number.isFinite(threshold)) {
+    setBulkStatus("Enter a valid ELO threshold.", true);
+    return;
+  }
+  const mode = $("direction").value; // "above" | "below"
+  const gameId = select.value;
+  const gameName = select.options[select.selectedIndex].textContent;
+  const cutoff = threshold + ELO_OFFSET;
+
+  const ok = confirm(
+    `Red thumb ALL players of "${gameName}" with an ELO ${mode} ${threshold}?\n\n` +
+    `(Ranking ${mode === "above" ? ">" : "<"} ${cutoff})\n\n` +
+    `This can affect a large number of players and may take a long time. ` +
+    `Requests are paced to avoid overloading the server, and you can press Stop at any time.`
+  );
+  if (!ok) return;
+
+  const tab = await findBgaTab();
+  if (!tab) {
+    setBulkStatus("Open a boardgamearena.com tab (and log in) first.", true);
+    return;
+  }
+  const tabId = tab.id;
+  state.tabId = tabId;
+
+  const stats = { pages: 0, scanned: 0, matched: 0, thumbed: 0, skipped: 0, failed: 0 };
+  const seen = new Set();
+  let start = 0;
+  let consecutiveFailures = 0;
+  let reason = "";
+
+  bulkStopRequested = false;
+  setBulkRunning(true);
+  setBulkStatus("Running…");
+  showStats(stats, "Fetching first ranking page…");
+
+  try {
+    outer: while (!bulkStopRequested) {
+      let data;
+      try {
+        data = await pageJson(tabId, "/gamepanel/gamepanel/getRanking.html", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: new URLSearchParams({ game: gameId, start: String(start), mode: "elo" }).toString(),
+        });
+      } catch (e) {
+        if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          reason = `Aborted after repeated ranking request failures (${e.message}).`;
+          break;
+        }
+        await sleep(FAILURE_BACKOFF);
+        continue;
+      }
+      consecutiveFailures = 0;
+      stats.pages++;
+
+      const ranks = data.ranks || [];
+      if (!ranks.length) {
+        reason = "Reached the end of the ranking.";
+        break;
+      }
+
+      let fresh = 0;
+      for (const p of ranks) {
+        if (bulkStopRequested) break outer;
+        if (seen.has(p.id)) continue;
+        seen.add(p.id);
+        fresh++;
+        stats.scanned++;
+
+        const ranking = parseFloat(p.ranking);
+        if (!Number.isFinite(ranking)) continue;
+        const note = `Last player scanned: ELO ${(ranking - ELO_OFFSET).toFixed(1)}`;
+
+        // The list is sorted by ranking (descending).
+        if (mode === "above" && !(ranking > cutoff)) {
+          reason = "Reached players at or below the threshold.";
+          showStats(stats, note);
+          break outer;
+        }
+        const hit = mode === "above" ? ranking > cutoff : ranking < cutoff;
+        if (!hit) {
+          showStats(stats, note);
+          continue;
+        }
+
+        stats.matched++;
+        if (state.given.includes(String(p.id))) {
+          stats.skipped++;
+          showStats(stats, note);
+          continue;
+        }
+
+        const result = await changeReputationInPage(tabId, String(p.id), -1);
+        if (result.ok) {
+          stats.thumbed++;
+          consecutiveFailures = 0;
+          state.given.push(String(p.id));
+        } else {
+          stats.failed++;
+          if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            reason = `Aborted after repeated red-thumb failures (${result.text}).`;
+            showStats(stats, note);
+            break outer;
+          }
+          await sleep(FAILURE_BACKOFF);
+        }
+        showStats(stats, note);
+        await sleep(THUMB_DELAY);
+      }
+
+      if (!fresh) {
+        reason = "No new players were returned; stopping.";
+        break;
+      }
+      start += ranks.length;
+      await sleep(RANK_DELAY);
+    }
+    if (bulkStopRequested) reason = "Stopped by user.";
+  } catch (e) {
+    reason = `Unexpected error: ${e.message}`;
+  } finally {
+    setBulkRunning(false);
+    setBulkStatus(reason);
+    showStats(stats, $("bulk-note").textContent);
+    render();
+    ensureProfiles(state.given);
+  }
+
+  alert(
+    `${reason}\n\n` +
+    `Players scanned: ${stats.scanned}\n` +
+    `Red-thumbed: ${stats.thumbed}\n` +
+    `Already red-thumbed (skipped): ${stats.skipped}\n` +
+    `Failed: ${stats.failed}`
+  );
+}
+
+$("game-search").onclick = searchGames;
+$("game-query").addEventListener("keydown", (e) => { if (e.key === "Enter") searchGames(); });
+$("bulk-start").onclick = startBulk;
+$("bulk-stop").onclick = () => {
+  bulkStopRequested = true;
+  setBulkStatus("Stopping…");
+};
+
+/* ---------- Init ---------- */
+
 $("refresh").onclick = load;
-chrome.tabs.onActivated.addListener(load);
+chrome.tabs.onActivated.addListener(() => { if (!bulkRunning) load(); });
 loadCache().then(load);
