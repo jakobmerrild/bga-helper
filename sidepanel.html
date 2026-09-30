@@ -31,7 +31,8 @@
     .tab:hover:not(:disabled) { background: none; color: var(--accent); }
     .tab.active { border-bottom-color: var(--accent); font-weight: 600; }
     section[hidden] { display: none; }
-    .toolbar { display: flex; justify-content: flex-end; }
+    .toolbar { display: flex; gap: 6px; }
+    li[hidden] { display: none; }
 
     /* lists */
     ul { list-style: none; margin: 0; padding: 0; }
@@ -72,14 +73,19 @@
 
   <!-- Tab 1: lists -->
   <section id="tab-thumbs">
-    <div class="toolbar"><button id="refresh" title="Re-read from the page">Refresh</button></div>
+    <div class="toolbar">
+      <input id="filter" type="search" placeholder="Filter by name or id…" autocomplete="off">
+      <button id="refresh" title="Re-read from the page">Refresh</button>
+    </div>
     <div id="status"></div>
 
     <h2>Red thumbs I have given <span class="count" id="given-count"></span></h2>
     <ul id="given"></ul>
+    <div class="empty" id="given-nomatch" hidden>No matches</div>
 
     <h2>Red thumbs I have received <span class="count" id="taken-count"></span></h2>
     <ul id="taken"></ul>
+    <div class="empty" id="taken-nomatch" hidden>No matches</div>
   </section>
 
   <!-- Tab 2: bulk -->

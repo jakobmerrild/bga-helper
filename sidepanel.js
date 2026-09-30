@@ -225,6 +225,7 @@ function fillRows(id) {
     const img = li.querySelector("img.avatar");
     if (p.avatar) img.src = p.avatar;
   });
+  scheduleFilter();
 }
 
 function renderList(kind) {
@@ -243,9 +244,38 @@ function renderList(kind) {
   ids.forEach(fillRows);
 }
 
+// In-memory filter over the rendered rows (matches the shown name or the user id).
+function applyFilter() {
+  const q = $("filter").value.trim().toLowerCase();
+  for (const kind of ["given", "taken"]) {
+    const items = $(kind).querySelectorAll("li[data-id]");
+    let shown = 0;
+    items.forEach((li) => {
+      const hay = `${li.querySelector("a.name").textContent} ${li.dataset.id}`.toLowerCase();
+      const match = !q || hay.includes(q);
+      li.hidden = !match;
+      if (match) shown++;
+    });
+    $(`${kind}-count`).textContent = q && items.length ? `(${shown} of ${items.length})` : `(${items.length})`;
+    $(`${kind}-nomatch`).hidden = !(q && items.length && !shown);
+  }
+}
+
+// Coalesce filter re-application while profile names are still streaming in.
+let filterScheduled = false;
+function scheduleFilter() {
+  if (filterScheduled || !$("filter").value.trim()) return;
+  filterScheduled = true;
+  requestAnimationFrame(() => {
+    filterScheduled = false;
+    applyFilter();
+  });
+}
+
 function render() {
   renderList("given");
   renderList("taken");
+  applyFilter();
 }
 
 async function act(btn, id, value) {
@@ -516,5 +546,6 @@ $("bulk-stop").onclick = () => {
 /* ---------- Init ---------- */
 
 $("refresh").onclick = load;
+$("filter").addEventListener("input", applyFilter);
 chrome.tabs.onActivated.addListener(() => { if (!bulkRunning) load(); });
 loadCache().then(load);
