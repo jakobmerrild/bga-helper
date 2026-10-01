@@ -6,6 +6,7 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
 const RANK_DELAY = 500;    // ms between ranking page requests
 const THUMB_DELAY = 250;   // ms between red-thumb requests
 const FAILURE_BACKOFF = 3000;
+const SKIP_AHEAD_START = 500; // first probe offset when searching for the threshold (below mode)
 const MAX_CONSECUTIVE_FAILURES = 5;
 
 // Rating types the bulk tool can work with.
@@ -407,6 +408,71 @@ async function searchGames() {
   }
 }
 
+async function fetchRankingPage(tabId, gameId, cfg, start) {
+  return pageJson(tabId, "/gamepanel/gamepanel/getRanking.html", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+    body: new URLSearchParams({ game: gameId, start: String(start), mode: cfg.mode }).toString(),
+  });
+}
+
+// "Below" mode: the ranking is sorted high -> low, so instead of walking every page we look for the
+// first page whose LAST player is below the cutoff (galloping from SKIP_AHEAD_START, then binary
+// search) and begin scanning one page before it. A failed probe is treated as "below", which can
+// only make us start earlier than necessary, never skip players.
+async function findBelowThresholdStart({ tabId, gameId, cfg, cutoff, stats }) {
+  const lastValue = (ranks) => {
+    for (let i = ranks.length - 1; i >= 0; i--) {
+      const v = parseFloat(ranks[i][cfg.field]);
+      if (Number.isFinite(v)) return v;
+    }
+    return null;
+  };
+
+  const probe = async (start) => {
+    let ranks = null;
+    for (let attempt = 0; attempt < 2 && ranks === null; attempt++) {
+      try {
+        ranks = (await fetchRankingPage(tabId, gameId, cfg, start)).ranks || [];
+      } catch {
+        await sleep(FAILURE_BACKOFF);
+      }
+    }
+    stats.pages++;
+    showStats(stats, `Locating the threshold in the ranking… (checked player #${start + 1})`);
+    await sleep(RANK_DELAY);
+    if (!ranks || !ranks.length) return { below: true, size: 0 }; // past the end, or unknown
+    const v = lastValue(ranks);
+    return { below: v !== null && v < cutoff, size: ranks.length };
+  };
+
+  const first = await probe(0);
+  if (bulkStopRequested || first.below || first.size === 0) return 0;
+  const pageSize = first.size;
+
+  // Gallop: 500, 1000, 2000, ... until a probe lands on a page that is below the cutoff (or past the end).
+  let loP = 0;      // page index known to be entirely at/above the cutoff
+  let hiP = null;   // page index known to be (at least partly) below it
+  let candP = Math.ceil(SKIP_AHEAD_START / pageSize);
+  while (hiP === null) {
+    const r = await probe(candP * pageSize);
+    if (bulkStopRequested) return 0;
+    if (r.below || candP * pageSize > 50_000_000) hiP = candP;
+    else { loP = candP; candP *= 2; }
+  }
+
+  // Binary search for the first such page.
+  while (hiP - loP > 1) {
+    const midP = Math.floor((loP + hiP) / 2);
+    const r = await probe(midP * pageSize);
+    if (bulkStopRequested) return 0;
+    if (r.below) hiP = midP;
+    else loP = midP;
+  }
+
+  return Math.max(0, (hiP - 1) * pageSize); // one page of safety margin
+}
+
 async function startBulk() {
   const select = $("game-select");
   if (select.hidden || !select.value) {
@@ -449,17 +515,25 @@ async function startBulk() {
   bulkStopRequested = false;
   setBulkRunning(true);
   setBulkStatus("Running…");
-  showStats(stats, "Fetching first ranking page…");
+  if (mode === "below") {
+    showStats(stats, "Locating the threshold in the ranking…");
+    try {
+      start = await findBelowThresholdStart({ tabId, gameId, cfg, cutoff, stats });
+    } catch {
+      start = 0;
+    }
+    if (start > 0 && !bulkStopRequested) {
+      showStats(stats, `Skipped ahead to player #${start + 1}; scanning from there…`);
+    }
+  } else {
+    showStats(stats, "Fetching first ranking page…");
+  }
 
   try {
     outer: while (!bulkStopRequested) {
       let data;
       try {
-        data = await pageJson(tabId, "/gamepanel/gamepanel/getRanking.html", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-          body: new URLSearchParams({ game: gameId, start: String(start), mode: cfg.mode }).toString(),
-        });
+        data = await fetchRankingPage(tabId, gameId, cfg, start);
       } catch (e) {
         if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           reason = `Aborted after repeated ranking request failures (${e.message}).`;
