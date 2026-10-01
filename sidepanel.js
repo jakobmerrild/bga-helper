@@ -7,7 +7,24 @@ const RANK_DELAY = 500;    // ms between ranking page requests
 const THUMB_DELAY = 250;   // ms between red-thumb requests
 const FAILURE_BACKOFF = 3000;
 const MAX_CONSECUTIVE_FAILURES = 5;
-const ELO_OFFSET = 1300;
+
+// Rating types the bulk tool can work with.
+//   mode:      value for the `mode` parameter of getRanking.html
+//   field:     property of each ranking row holding the value to compare
+//   toCutoff:  converts the user's input into the value compared with `field`
+//   toDisplay: converts a row's value back into the scale the user types in
+const RATINGS = {
+  elo: {
+    mode: "elo", field: "ranking", label: "ELO",
+    toCutoff: (v) => v + 1300, toDisplay: (r) => r - 1300,
+    hint: "1300 is added to this value before comparing it with the ranking returned by BGA.",
+  },
+  arena: {
+    mode: "arena", field: "arena", label: "Arena rating",
+    toCutoff: (v) => v - 1600, toDisplay: (r) => r + 1600,
+    hint: "1600 is subtracted from this value before comparing it with the arena value returned by BGA.",
+  },
+};
 
 const state = { tabId: null, given: [], taken: [] };
 const profiles = new Map(); // id -> { name, avatar, t }
@@ -355,7 +372,7 @@ function setBulkRunning(running) {
   bulkRunning = running;
   $("bulk-start").disabled = running;
   $("bulk-stop").disabled = !running;
-  for (const id of ["game-query", "game-search", "game-select", "direction", "threshold"]) {
+  for (const id of ["game-query", "game-search", "game-select", "rating-type", "direction", "threshold"]) {
     $(id).disabled = running;
   }
 }
@@ -396,18 +413,19 @@ async function startBulk() {
     setBulkStatus("Search for a game and select it first.", true);
     return;
   }
+  const cfg = RATINGS[$("rating-type").value];
   const threshold = parseFloat($("threshold").value);
   if (!Number.isFinite(threshold)) {
-    setBulkStatus("Enter a valid ELO threshold.", true);
+    setBulkStatus(`Enter a valid ${cfg.label} threshold.`, true);
     return;
   }
   const mode = $("direction").value; // "above" | "below"
   const gameId = select.value;
   const gameName = select.options[select.selectedIndex].textContent;
-  const cutoff = threshold + ELO_OFFSET;
+  const cutoff = cfg.toCutoff(threshold);
 
   const ok = confirm(
-    `Red thumb ALL players of "${gameName}" with an ELO ${mode} ${threshold}?\n\n` +
+    `Red thumb ALL players of "${gameName}" with an ${cfg.label} ${mode} ${threshold}?\n\n` +
     `(Ranking ${mode === "above" ? ">" : "<"} ${cutoff})\n\n` +
     `This can affect a large number of players and may take a long time. ` +
     `Requests are paced to avoid overloading the server, and you can press Stop at any time.`
@@ -440,7 +458,7 @@ async function startBulk() {
         data = await pageJson(tabId, "/gamepanel/gamepanel/getRanking.html", {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-          body: new URLSearchParams({ game: gameId, start: String(start), mode: "elo" }).toString(),
+          body: new URLSearchParams({ game: gameId, start: String(start), mode: cfg.mode }).toString(),
         });
       } catch (e) {
         if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -467,9 +485,9 @@ async function startBulk() {
         fresh++;
         stats.scanned++;
 
-        const ranking = parseFloat(p.ranking);
+        const ranking = parseFloat(p[cfg.field]);
         if (!Number.isFinite(ranking)) continue;
-        const note = `Last player scanned: ELO ${(ranking - ELO_OFFSET).toFixed(1)}`;
+        const note = `Last player scanned: ${cfg.label} ${cfg.toDisplay(ranking).toFixed(1)}`;
 
         // The list is sorted by ranking (descending).
         if (mode === "above" && !(ranking > cutoff)) {
@@ -537,6 +555,15 @@ async function startBulk() {
 
 $("game-search").onclick = searchGames;
 $("game-query").addEventListener("keydown", (e) => { if (e.key === "Enter") searchGames(); });
+function updateRatingLabels() {
+  const cfg = RATINGS[$("rating-type").value];
+  $("threshold-label").textContent = `${cfg.label} threshold`;
+  $("threshold-hint").textContent = cfg.hint;
+  $("direction").options[0].textContent = `below the ${cfg.label} threshold`;
+  $("direction").options[1].textContent = `above the ${cfg.label} threshold`;
+}
+$("rating-type").addEventListener("change", updateRatingLabels);
+updateRatingLabels();
 $("bulk-start").onclick = startBulk;
 $("bulk-stop").onclick = () => {
   bulkStopRequested = true;

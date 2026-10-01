@@ -97,15 +97,21 @@
     </div>
     <select id="game-select" hidden style="margin-top:6px"></select>
 
+    <label for="rating-type">Rating</label>
+    <select id="rating-type">
+      <option value="elo" selected>ELO</option>
+      <option value="arena">Arena rating</option>
+    </select>
+
     <label for="direction">Red thumb players…</label>
     <select id="direction">
       <option value="below" selected>below the ELO threshold</option>
       <option value="above">above the ELO threshold</option>
     </select>
 
-    <label for="threshold">ELO threshold</label>
+    <label for="threshold" id="threshold-label">ELO threshold</label>
     <input id="threshold" type="number" step="any" value="0">
-    <div class="muted">1300 is added to this value before comparing it with the ranking returned by BGA.</div>
+    <div class="muted" id="threshold-hint">1300 is added to this value before comparing it with the ranking returned by BGA.</div>
 
     <div class="actions">
       <button id="bulk-start" class="primary">Start</button>
