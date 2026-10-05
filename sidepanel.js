@@ -12,18 +12,26 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 // Rating types the bulk tool can work with.
 //   mode:      value for the `mode` parameter of getRanking.html
 //   field:     property of each ranking row holding the value to compare
-//   toCutoff:  converts the user's input into the value compared with `field`
-//   toDisplay: converts a row's value back into the scale the user types in
+//   parse:     turns the raw `field` value into a number (NaN if unusable)
+//   toCutoff:  converts the user's input into the value compared with the parsed `field`
+//   toDisplay: converts a parsed value back into the scale the user types in
 const RATINGS = {
   elo: {
     mode: "elo", field: "ranking", label: "ELO",
+    parse: (raw) => parseFloat(raw),
     toCutoff: (v) => v + 1300, toDisplay: (r) => r - 1300,
     hint: "1300 is added to this value before comparing it with the ranking returned by BGA.",
   },
   arena: {
+    // BGA returns arena values like "501.2154": an opaque prefix, a dot, then the actual rating.
     mode: "arena", field: "arena", label: "Arena rating",
-    toCutoff: (v) => v - 1600, toDisplay: (r) => r + 1600,
-    hint: "1600 is subtracted from this value before comparing it with the arena value returned by BGA.",
+    parse: (raw) => {
+      const s = String(raw ?? "");
+      const dot = s.indexOf(".");
+      return dot === -1 ? NaN : parseFloat(s.slice(dot + 1));
+    },
+    toCutoff: (v) => v, toDisplay: (r) => r,
+    hint: "Compared directly with the rating after the prefix (e.g. 501.) in the arena value returned by BGA.",
   },
 };
 
@@ -423,7 +431,7 @@ async function fetchRankingPage(tabId, gameId, cfg, start) {
 async function findBelowThresholdStart({ tabId, gameId, cfg, cutoff, stats }) {
   const lastValue = (ranks) => {
     for (let i = ranks.length - 1; i >= 0; i--) {
-      const v = parseFloat(ranks[i][cfg.field]);
+      const v = cfg.parse(ranks[i][cfg.field]);
       if (Number.isFinite(v)) return v;
     }
     return null;
@@ -559,7 +567,7 @@ async function startBulk() {
         fresh++;
         stats.scanned++;
 
-        const ranking = parseFloat(p[cfg.field]);
+        const ranking = cfg.parse(p[cfg.field]);
         if (!Number.isFinite(ranking)) continue;
         const note = `Last player scanned: ${cfg.label} ${cfg.toDisplay(ranking).toFixed(1)}`;
 
